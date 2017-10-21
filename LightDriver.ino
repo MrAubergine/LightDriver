@@ -47,6 +47,7 @@ void setup() {
 
 uint8_t gHue = 0; // rotating "base color" used by many of the patterns
 bool gComms = false;
+unsigned long gStartComms = 0;
 
 void loop()
 {
@@ -70,6 +71,7 @@ void loop()
 			if (Serial1.read() == '*')
 			{
 				Serial1.write('R');
+				gStartComms = millis();
 				gComms = true;
 			}
 		}
@@ -78,14 +80,43 @@ void loop()
 
 void commloop()
 {
-	leds[0] = CRGB(128, 128, 128);
-	FastLED.show();
+	// strip off any remaining *s
+	while (Serial1.peek() == '*')
+		Serial1.read();
 
-	// Early out if there's nothing to read
-	if (Serial1.available() == 0)
-		return;
+	// wait until we have 8 bytes read or 500ms has passed
+	if (Serial1.available() >= 8)
+	{
+		char cmd[9];
+		Serial1.readBytes(cmd, 8);
+		handleinput(cmd);
+		cmd[8] = 0;
+		Serial.println(cmd);
+		gComms = false;
+	}
+	else if (millis() > gStartComms + 500)
+	{
+		Serial.println("timeout");
+		gComms = false;
+	}
+}
 
-	Serial.print("Bloop\n");
+void handleinput(char* cmd)
+{
+	char celem[3];
+	celem[2] = 0;
+	celem[0] = cmd[2];
+	celem[1] = cmd[3];
+	int r = strtoul(celem, NULL, 16);
+	celem[0] = cmd[4];
+	celem[1] = cmd[5];
+	int g = strtoul(celem, NULL, 16);
+	celem[0] = cmd[6];
+	celem[1] = cmd[7];
+	int b = strtoul(celem, NULL, 16);
+
+	CRGB col = CRGB(r, g, b);
+	fill_solid(leds, NUM_LEDS, col);
 }
 
 
