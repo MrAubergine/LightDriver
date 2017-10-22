@@ -70,6 +70,7 @@ void loop()
 		{
 			if (Serial1.read() == '*')
 			{
+				Serial.println('*');
 				Serial1.write('R');
 				gStartComms = millis();
 				gComms = true;
@@ -82,7 +83,10 @@ void commloop()
 {
 	// strip off any remaining *s
 	while (Serial1.peek() == '*')
+	{
 		Serial1.read();
+		Serial.print("*");
+	}
 
 	// wait until we have 8 bytes read or 500ms has passed
 	if (Serial1.available() >= 8)
@@ -91,12 +95,17 @@ void commloop()
 		Serial1.readBytes(cmd, 8);
 		handleinput(cmd);
 		cmd[8] = 0;
+		Serial.println();
 		Serial.println(cmd);
 		gComms = false;
 	}
-	else if (millis() > gStartComms + 500)
+	else if (millis() > gStartComms + 1000)
 	{
-		Serial.println("timeout");
+		Serial.println();
+		Serial.print("timeout ");
+		while (Serial1.available())
+			Serial.print((char)Serial1.read());
+		Serial.println();
 		gComms = false;
 	}
 }
