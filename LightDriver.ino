@@ -6,6 +6,8 @@ FASTLED_USING_NAMESPACE
 #warning "Requires FastLED 3.1 or later; check github for latest code."
 #endif
 
+#define DEV_BOARD // define this to use the dev board, undef to use the real room lights
+
 #define NUM_STRIPS 4
 #define NUM_LEDS_STRIP1 93
 #define NUM_LEDS_STRIP2 78
@@ -14,21 +16,24 @@ FASTLED_USING_NAMESPACE
 #define NUM_LEDS NUM_LEDS_STRIP1 + NUM_LEDS_STRIP2 + NUM_LEDS_STRIP3 + NUM_LEDS_STRIP4
 
 CRGB leds[NUM_LEDS];
+uint8_t gBrightness = 0;
 
-#define BRIGHTNESS         10
+#ifdef DEV_BOARD
+	uint8_t gBrightnessTarget = 10;
+	HardwareSerial& BTSerial = Serial1;
+	#define DebugPrint(x) Serial.print(x)
+	#define DebugPrintLn(x) Serial.println(x)
+#else
+	uint8_t gBrightnessTarget = 160;
+	HardwareSerial& BTSerial = Serial;
+	#define DebugPrint(x)
+	#define DebugPrintLn(x)
+#endif
+
 #define FRAMES_PER_SECOND  120
 
-void printfunc(char *fmt, ...) {
-	char buf[128]; // resulting string limited to 128 chars
-	va_list args;
-	va_start(args, fmt);
-	vsnprintf(buf, 128, fmt, args);
-	va_end(args);
-	Serial.print(buf);
-}
-
 void setup() {
-  delay(1000); // 3 second delay for recovery
+  delay(1000); // 1 second delay for recovery
   
   FastLED.addLeds<NEOPIXEL, 8>(leds, 0, NUM_LEDS_STRIP1);
 
@@ -39,12 +44,22 @@ void setup() {
   FastLED.addLeds<NEOPIXEL, 11>(leds, NUM_LEDS_STRIP1 + NUM_LEDS_STRIP2 + NUM_LEDS_STRIP3, NUM_LEDS_STRIP4);
   
   // set master brightness control
-  FastLED.setBrightness(BRIGHTNESS);
+  FastLED.setBrightness(gBrightness);
 
-  Serial.begin(38400);
-  Serial1.begin(9600);
+#ifdef DEV_BOARD
+	Serial.begin(38400);
+	BTSerial.begin(9600);
+#else
+	Serial.begin(9600);
+#endif
 }
 
+enum
+{
+	ModeSolid,
+	ModeRainbow,
+} gMode = ModeRainbow;
+int gRainbowDelta = 7;
 uint8_t gHue = 0; // rotating "base color" used by many of the patterns
 bool gComms = false;
 unsigned long gStartComms = 0;
@@ -66,12 +81,33 @@ void loop()
 		EVERY_N_MILLISECONDS(20) { gHue++; } // slowly cycle the "base color" through the rainbow
 											  // EVERY_N_SECONDS(10) { nextPattern(); Serial.write("Changing\n");  } // change patterns periodically
 
-		if (Serial1.available() > 0)
+		if (gMode == ModeRainbow)
 		{
-			if (Serial1.read() == '*')
+			fill_rainbow(leds, NUM_LEDS, gHue, gRainbowDelta);
+		}
+
+		if (gBrightness != gBrightnessTarget)
+		{
+			int step;
+			if (abs(gBrightness - gBrightnessTarget) > 8)
+				step = 8;
+			else
+				step = 1;
+
+			if (gBrightness < gBrightnessTarget)
+				gBrightness += step;
+			else
+				gBrightness -= step;
+			
+			FastLED.setBrightness(gBrightness);
+		}
+
+		if (BTSerial.available() > 0)
+		{
+			if (BTSerial.read() == '*')
 			{
-				Serial.println('*');
-				Serial1.write('R');
+				DebugPrintLn("Connected...");
+				BTSerial.write("RRRR",4);
 				gStartComms = millis();
 				gComms = true;
 			}
@@ -82,50 +118,66 @@ void loop()
 void commloop()
 {
 	// strip off any remaining *s
-	while (Serial1.peek() == '*')
+	while (BTSerial.peek() == '*')
 	{
-		Serial1.read();
-		Serial.print("*");
+		char chStrip = BTSerial.read();
+		DebugPrint(chStrip);
 	}
 
 	// wait until we have 8 bytes read or 500ms has passed
-	if (Serial1.available() >= 8)
+	if (BTSerial.available() >= 7)
 	{
 		char cmd[9];
-		Serial1.readBytes(cmd, 8);
+		BTSerial.readBytes(cmd, 7);
 		handleinput(cmd);
-		cmd[8] = 0;
-		Serial.println();
-		Serial.println(cmd);
+		cmd[7] = 0;
+		DebugPrintLn();
+		DebugPrint("Command...");
+		DebugPrintLn(cmd);
 		gComms = false;
 	}
 	else if (millis() > gStartComms + 1000)
 	{
-		Serial.println();
-		Serial.print("timeout ");
-		while (Serial1.available())
-			Serial.print((char)Serial1.read());
-		Serial.println();
+		DebugPrintLn();
+		DebugPrint("Timeout...");
+		while (BTSerial.available())
+		{
+			char chRemain = BTSerial.read();
+			DebugPrint(chRemain);
+		}
+		DebugPrintLn();
 		gComms = false;
 	}
 }
 
 void handleinput(char* cmd)
 {
-	char celem[3];
-	celem[2] = 0;
-	celem[0] = cmd[2];
-	celem[1] = cmd[3];
-	int r = strtoul(celem, NULL, 16);
-	celem[0] = cmd[4];
-	celem[1] = cmd[5];
-	int g = strtoul(celem, NULL, 16);
-	celem[0] = cmd[6];
-	celem[1] = cmd[7];
-	int b = strtoul(celem, NULL, 16);
+	char cnum[3] = { 0 };
+	int val[3];
+	for (int i = 0, vi = 1; i < 3; i++, vi += 2)
+	{
+		cnum[0] = cmd[vi];
+		cnum[1] = cmd[vi + 1];
+		val[i] = strtoul(cnum, NULL, 16);
+	}
 
-	CRGB col = CRGB(r, g, b);
-	fill_solid(leds, NUM_LEDS, col);
+	CRGB col;
+
+	switch(cmd[0])
+	{
+	case 'S':
+		col = CRGB(val[0], val[1], val[2]);
+		fill_solid(leds, NUM_LEDS, col);
+		gMode = ModeSolid;
+		break;
+	case 'R':
+		gRainbowDelta = val[0];
+		gMode = ModeRainbow;
+		break;
+	case 'B':
+		gBrightnessTarget = val[0];
+		break;
+	}
 }
 
 
